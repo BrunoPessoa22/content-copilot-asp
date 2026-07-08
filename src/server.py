@@ -1,18 +1,20 @@
-"""Content Copilot MCP server.
+"""Content Copilot MCP server (local / stdio).
 
-Exposes four verbs — ingest, mine_moments, pack, ship — as MCP tools.
-Ready to be listed on OKX.AI as an Agent-to-MCP service. The OKX Payment
-SDK hook is a single call site (see ``bill_call``); until it's wired the
-server runs free for local development.
+Exposes the four verbs — ingest, mine_moments, pack, ship — as MCP tools for
+LOCAL agent use (Claude Code, OpenClaw, any MCP client). This mode is unmetered:
+it runs the pipeline directly with the operator's own credentials.
+
+The PAID surface for the OKX.AI marketplace is ``app.main`` — a FastAPI server
+where every verb sits behind an x402 payment wall (HTTP 402 challenge, EIP-3009
+signature, on-chain USDT0 settlement on X Layer via the OKX Broker).
+
+Run:  python -m src.server
 """
 
 from __future__ import annotations
 
-import argparse
 import asyncio
 import json
-import os
-import sys
 from typing import Any
 
 from mcp.server import Server
@@ -21,28 +23,6 @@ from mcp.types import Tool, TextContent
 
 from . import ingest, mine, pack, ship
 from .voice_dna import load_voice_profile
-
-
-PRICING_USDG = {
-    "ingest": 0.50,
-    "mine_moments": 1.00,
-    "pack": 2.00,
-    "ship": 1.00,
-}
-
-
-def bill_call(tool: str, caller_agent: str | None) -> None:
-    """OKX Payment SDK hook — settle a per-call charge on X Layer.
-
-    Real implementation calls the OKX Payment SDK once creds are provisioned.
-    For local dev this is a no-op that logs to stderr so we can see the meter.
-    """
-    price = PRICING_USDG[tool]
-    print(
-        json.dumps({"event": "bill", "tool": tool, "caller": caller_agent, "price_usdg": price}),
-        file=sys.stderr,
-    )
-
 
 server = Server("content-copilot")
 
@@ -54,7 +34,7 @@ async def list_tools() -> list[Tool]:
             name="content_copilot.ingest",
             description=(
                 "Download and transcribe a raw source (YouTube, podcast RSS episode, "
-                "MP3/MP4 URL, PDF). Returns a session_id used by every downstream verb."
+                "MP3/MP4 URL, article). Returns a session_id used by every downstream verb."
             ),
             inputSchema={
                 "type": "object",
@@ -109,8 +89,8 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="content_copilot.ship",
             description=(
-                "Publish a pack through the caller-supplied downstream (Typefully, "
-                "Instagram Graph, LinkedIn, Resend). Returns permalink + provider IDs."
+                "Publish a pack through a server-registered downstream credential "
+                "(Typefully, Instagram Graph, LinkedIn, Resend). Returns permalink + provider IDs."
             ),
             inputSchema={
                 "type": "object",
@@ -127,21 +107,16 @@ async def list_tools() -> list[Tool]:
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
-    caller = arguments.pop("_caller_agent", None)
     if name == "content_copilot.ingest":
-        bill_call("ingest", caller)
         result = await ingest.run(arguments["source_url"], arguments.get("kind", "auto"))
     elif name == "content_copilot.mine_moments":
-        bill_call("mine_moments", caller)
         result = await mine.run(arguments["session_id"], arguments.get("top_k", 10))
     elif name == "content_copilot.pack":
-        bill_call("pack", caller)
         voice = load_voice_profile(arguments.get("voice_profile", "generic-founder"))
         result = await pack.run(
             arguments["session_id"], arguments["moment_id"], arguments["target"], voice
         )
     elif name == "content_copilot.ship":
-        bill_call("ship", caller)
         result = await ship.run(
             arguments["session_id"], arguments["pack_id"], arguments["credentials_ref"]
         )
@@ -156,28 +131,7 @@ async def main_stdio() -> None:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser()
-    p.add_argument("--transport", choices=["stdio", "http"], default="stdio")
-    p.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8787)))
-    args = p.parse_args()
-    if args.transport == "stdio":
-        asyncio.run(main_stdio())
-    else:
-        from mcp.server.sse import SseServerTransport
-        import uvicorn
-        from starlette.applications import Starlette
-        from starlette.routing import Mount, Route
-
-        sse = SseServerTransport("/messages/")
-
-        async def handle_sse(request):
-            async with sse.connect_sse(request.scope, request.receive, request._send) as streams:
-                await server.run(streams[0], streams[1], server.create_initialization_options())
-
-        app = Starlette(
-            routes=[Route("/sse", endpoint=handle_sse), Mount("/messages/", app=sse.handle_post_message)]
-        )
-        uvicorn.run(app, host="0.0.0.0", port=args.port)
+    asyncio.run(main_stdio())
 
 
 if __name__ == "__main__":
