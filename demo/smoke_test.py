@@ -1,10 +1,12 @@
-"""Offline smoke test — proves the pipeline wires end-to-end without Whisper/yt-dlp.
+"""Offline smoke test — proves the pipeline wires end-to-end without yt-dlp/Whisper.
 
-Runs ingest (stubbed transcript), mine_moments (real Anthropic call), pack (real
-Anthropic call). Exits non-zero on any failure. Used by CI + pre-demo verification.
+Runs ingest (pre-seeded transcript), mine_moments (real LLM call), pack (real
+LLM call). Exits non-zero on any failure. Used for pre-demo verification.
+
+Needs one LLM backend: LLM_DISPATCH_URL+LLM_DISPATCH_SECRET or ANTHROPIC_API_KEY.
 
 Usage:
-    ANTHROPIC_API_KEY=... python demo/smoke_test.py
+    python demo/smoke_test.py
 """
 
 from __future__ import annotations
@@ -17,7 +19,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-os.environ.setdefault("CC_TRANSCRIBE_STUB", "1")
 os.environ.setdefault("CC_SESSION_DIR", "/tmp/content-copilot-smoke")
 
 from src import ingest, mine, pack  # noqa: E402
@@ -36,27 +37,26 @@ STUB_TRANSCRIPT = {
 
 
 async def main() -> int:
-    session_dir = Path(os.environ["CC_SESSION_DIR"])
-    session_dir.mkdir(parents=True, exist_ok=True)
-
-    fake_url = "https://smoke.local/karpathy-scale.mp3"
+    fake_url = "https://smoke.local/scale-episode.mp3"
     sid = ingest._session_id(fake_url)
-    stub_dir = session_dir / sid
+    stub_dir = Path(os.environ["CC_SESSION_DIR"]) / sid
     stub_dir.mkdir(parents=True, exist_ok=True)
-    (stub_dir / "transcript.json").write_text(json.dumps(STUB_TRANSCRIPT))
+    (stub_dir / "transcript.json").write_text(json.dumps(STUB_TRANSCRIPT, ensure_ascii=False))
     (stub_dir / "manifest.json").write_text(json.dumps({
         "session_id": sid,
         "source_url": fake_url,
         "kind": "audio",
-        "audio_path": None,
+        "transcription": "stub",
         "segments": len(STUB_TRANSCRIPT["segments"]),
         "duration_s": STUB_TRANSCRIPT["segments"][-1]["end"],
+        "cached": False,
     }))
 
-    print("=== 1. ingest (stubbed) ===")
+    print("=== 1. ingest (pre-seeded session; cache-hit path) ===")
     ingested = await ingest.run(fake_url)
     print(json.dumps(ingested, indent=2, ensure_ascii=False))
     assert ingested["session_id"] == sid, "session_id mismatch"
+    assert ingested["cached"] is True, "expected the cached manifest"
 
     print("\n=== 2. mine_moments (real LLM) ===")
     mined = await mine.run(sid, top_k=3)
