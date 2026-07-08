@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -17,14 +18,28 @@ import httpx
 SESSION_DIR = Path(os.environ.get("CC_SESSION_DIR", "/tmp/content-copilot"))
 
 
-def _resolve_credential(ref: str) -> dict[str, str]:
-    """Placeholder for the caller credential resolver.
+class ShipError(RuntimeError):
+    """Pack missing, credential ref unknown, or downstream rejected the publish."""
 
-    Real impl reads from the caller-agent's secret store using the ref. For
-    local dev, resolve via env vars keyed by the ref name.
+
+def _resolve_credential(ref: str) -> dict[str, str]:
+    """Resolve a server-registered credential reference.
+
+    v1 supports refs pre-registered with the operator (env vars prefixed with
+    the upper-cased ref name, e.g. ref ``demo-x`` -> ``DEMO_X_TYPEFULLY_API_KEY``).
+    Caller credentials are never persisted per-call. An unknown ref fails the
+    call BEFORE any publish attempt (and, behind the paywall, before billing).
     """
+    if not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", ref):
+        raise ShipError(f"invalid credentials_ref: {ref!r}")
     prefix = ref.upper().replace("-", "_") + "_"
-    return {k[len(prefix):]: v for k, v in os.environ.items() if k.startswith(prefix)}
+    creds = {k[len(prefix):]: v for k, v in os.environ.items() if k.startswith(prefix)}
+    if not creds:
+        raise ShipError(
+            f"unknown credentials_ref {ref!r} — register a downstream credential "
+            "with the operator first (see /terms)"
+        )
+    return creds
 
 
 async def _ship_x(pack: dict[str, Any], creds: dict[str, str]) -> dict[str, Any]:
@@ -88,8 +103,10 @@ async def _ship_newsletter(pack: dict[str, Any], creds: dict[str, str]) -> dict[
 
 
 async def run(session_id: str, pack_id: str, credentials_ref: str) -> dict[str, Any]:
-    packs_dir = SESSION_DIR / session_id / "packs"
-    pack = json.loads((packs_dir / f"{pack_id}.json").read_text())
+    pack_path = SESSION_DIR / session_id / "packs" / f"{pack_id}.json"
+    if not pack_path.exists():
+        raise ShipError(f"unknown pack_id {pack_id!r} for session {session_id!r} — call pack first")
+    pack = json.loads(pack_path.read_text())
     creds = _resolve_credential(credentials_ref)
     target = pack["target"]
     dispatch = {
@@ -98,4 +115,13 @@ async def run(session_id: str, pack_id: str, credentials_ref: str) -> dict[str, 
         "ig_reel": _ship_ig_reel,
         "newsletter": _ship_newsletter,
     }
-    return await dispatch[target](pack, creds)
+    try:
+        return await dispatch[target](pack, creds)
+    except KeyError as exc:
+        raise ShipError(f"credential ref {credentials_ref!r} is missing key {exc} for target {target!r}")
+    except httpx.HTTPStatusError as exc:
+        raise ShipError(
+            f"downstream {target} rejected the publish: HTTP {exc.response.status_code}"
+        )
+    except httpx.HTTPError as exc:
+        raise ShipError(f"downstream {target} unreachable: {exc}")

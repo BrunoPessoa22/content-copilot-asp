@@ -12,9 +12,13 @@ import os
 from pathlib import Path
 from typing import Any
 
-import anthropic
+from . import llm
 
 SESSION_DIR = Path(os.environ.get("CC_SESSION_DIR", "/tmp/content-copilot"))
+
+
+class PackError(RuntimeError):
+    """Session/moment missing or generation unusable."""
 
 
 CHANNEL_RULES = {
@@ -65,14 +69,25 @@ Turn this quote into a newsletter blurb under 600 chars. Rules: {rules}. Return 
 }
 
 
+_REQUIRED_KEYS = {
+    "x": ("tweets",),
+    "linkedin": ("body",),
+    "ig_reel": ("hook", "script", "ffmpeg_cmd", "ass_subtitles"),
+    "newsletter": ("blurb", "cta"),
+}
+
+
 async def run(session_id: str, moment_id: str, target: str, voice: dict[str, Any]) -> dict[str, Any]:
     if target not in CHANNEL_RULES:
-        raise ValueError(f"unknown target: {target}")
+        raise PackError(f"unknown target: {target}")
     session_dir = SESSION_DIR / session_id
-    moments = json.loads((session_dir / "moments.json").read_text())
+    moments_path = session_dir / "moments.json"
+    if not moments_path.exists():
+        raise PackError(f"no mined moments for {session_id} — call mine_moments first")
+    moments = json.loads(moments_path.read_text())
     moment = next((m for m in moments if m["moment_id"] == moment_id), None)
     if not moment:
-        raise ValueError(f"unknown moment_id: {moment_id}")
+        raise PackError(f"unknown moment_id: {moment_id}")
 
     rules = CHANNEL_RULES[target]
     prompt = TEMPLATES[target].format(
@@ -82,15 +97,22 @@ async def run(session_id: str, moment_id: str, target: str, voice: dict[str, Any
         start=moment["start_s"],
         end=moment["end_s"],
     )
-    client = anthropic.AsyncAnthropic()
-    resp = await client.messages.create(
-        model=os.environ.get("CC_PACK_MODEL", "claude-sonnet-4-6"),
-        max_tokens=4096,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    text = resp.content[0].text
-    start, end = text.find("{"), text.rfind("}")
-    body = json.loads(text[start : end + 1])
+    text = await llm.complete(prompt, tier="quality")
+    try:
+        body = llm.extract_json(text)
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise PackError(f"generation returned unparseable output: {exc}")
+    missing = [k for k in _REQUIRED_KEYS[target] if not body.get(k)]
+    if missing:
+        raise PackError(f"generation missing required fields for {target}: {missing}")
+    if target == "x":
+        tweets = [t for t in body.get("tweets", []) if isinstance(t, str) and t.strip()]
+        if not tweets:
+            raise PackError("x pack contains no tweets")
+        over = [i for i, t in enumerate(tweets) if len(t) > 280]
+        if over:
+            raise PackError(f"tweet(s) {over} exceed 280 chars — regenerate")
+        body["tweets"] = tweets
 
     pack_id = f"p_{moment_id}_{target}"
     pack_out = {
