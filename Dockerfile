@@ -5,9 +5,9 @@ WORKDIR /app
 
 # System deps: build-essential for eth-account / coincurve wheels; ffmpeg for
 # yt-dlp audio extraction; gosu so the entrypoint can fix volume ownership as
-# root then drop to the app user.
+# root then drop to the app user; curl for the platform container healthcheck.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential ffmpeg gosu ca-certificates \
+    && apt-get install -y --no-install-recommends build-essential ffmpeg gosu ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

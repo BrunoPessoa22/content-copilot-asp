@@ -1,38 +1,37 @@
-# Google Form — pre-filled answers (draft)
+# Google Form — pre-filled answers
 
-The actual Google Form URL is revealed after registering on hackquest.io. These
-are the answers to paste when the form appears. All fields drafted to the volume
-mandate ("say more, not less"). Bruno can trim on submission.
+Form: https://forms.gle/mddEUagmDbyV37ws8 (from the hackathon page).
+Deadline: **2026-07-17 22:59 UTC** (submit a day early; the page lists 22:59
+for the window and 23:59 for the form — don't gamble on the later one).
 
 ---
 
 **Project name:** Content Copilot
 
 **One-line description:** Any raw source (podcast, video, article) becomes
-shipping-ready multi-channel content packs — in the caller's own voice — through
-a pay-per-call MCP ASP on OKX.AI.
+shipping-ready multi-channel content packs — in the author's own voice —
+through a pay-per-call ASP settled on-chain via x402 on X Layer.
 
 **Track(s) applied:** Creative Genius, Social Buzz
 
-**Category (for track-tier prize):** Software Services
-
 **ASP mode:** Agent-to-MCP (A2MCP)
 
-**Pricing:** $0.50 (ingest) + $1.00 (mine) + $2.00 (pack) + $1.00 (ship). Full
-pipeline for one Reel: $4.50. Compared to $50-150 freelance short-form edit ≈ 10×
-cost reduction.
+**Pricing:** $0.10 (ingest) + $0.25 (mine) + $0.50 (pack) + $0.25 (ship),
+settled per call in USDT0 on X Layer. Full pipeline for one finished post:
+~$1.10 — versus $50–150 freelance short-form editing.
 
-**OKX.AI ASP listing URL:** `https://okx.ai/agents/content-copilot` (populated once
-listing is approved)
+**OKX.AI ASP listing URL:** `<populated once the listing is approved>`
 
-**GitHub repo:** `https://github.com/brunompessoa/content-copilot-asp`
+**Live endpoint:** https://copilot.brunopessoa.com (free discovery: /catalog)
 
-**X post URL:** `https://x.com/BrunoPessoa22/status/<id>` (populated after posting)
+**GitHub repo:** https://github.com/BrunoPessoa22/content-copilot-asp
 
-**Demo video URL:** embedded in X post above, ≤90s.
+**X post URL:** `<populated after posting>`
 
-**Team:** Bruno Pessoa (solo builder). Reused the Falcao/Tucano pipeline already
-running in production for Cultura Builder (8k+ member AI community).
+**Demo video URL:** embedded in the X post, ≤90s.
+
+**Team:** Bruno Pessoa (solo builder). Reuses the content pipeline pattern
+already running in production for Cultura Builder (8k+ member AI community).
 
 **Contact email:** bmpessoa22@gmail.com
 
@@ -43,51 +42,56 @@ running in production for Cultura Builder (8k+ member AI community).
 ## Long-form: "Why this ASP" (500-word cap)
 
 Every founder and creator sits on hours of raw source material — podcasts,
-YouTube episodes, live streams, essays — that never becomes distributed content
-because turning it into channel-native output is slow, tedious, and expensive.
+YouTube episodes, live streams, essays — that never becomes distributed
+content, because turning it into channel-native output is slow, tedious, and
+expensive.
 
-Content Copilot is that last mile as a paid agent skill. Four MCP verbs, priced
-per call, running on the same production pipeline that powers a real 8k-member
-AI education community's content ops (Cultura Builder + Bruno Pessoa's personal
-brand, ~4x/day publishing across X / LinkedIn / Instagram / newsletter for over
-a year).
+Content Copilot is that last mile as a paid agent skill: four verbs (ingest →
+mine → pack → ship), each priced per call and settled on-chain. It runs on the
+same production pipeline pattern that powers a real 8k-member AI education
+community's content ops (~4x/day publishing across X, LinkedIn, Instagram, and
+newsletter for over a year).
 
-The scoring weights inside `mine_moments` were learned from ~1200 real
-rejection notes captured through a human-in-the-loop approval gate. That data
-isn't reproducible from a weekend build — it's what makes the output feel like
-the author wrote it, not like an LLM wrote it.
+The moment-mining rubric (novelty, tension, stakes, quote-density,
+hookability) was tuned on ~1200 real human rejections captured through a
+human-in-the-loop approval gate. The channel rules inside pack are equally
+battle-tested: subtitle position math for vertical Reels, hook rules for X,
+banned-word lists per channel. Each rule started as a post a human rejected.
 
-The channel rules inside `pack` are equally battle-tested: subtitle position
-math for IG Reels (FontSize 12 Bold 0 Alignment 2 MarginV 280-320 for
-1080x1920 vertical), hook rules for X (first-person stake, never "Tem gente que
-acha…"), speaker-verification for Reel crops (identify actual speaker by name-tag
-+ mouth movement before 9:16 crop, panorama letterbox as safe fallback). Each
-rule started as a post that Bruno rejected on his phone.
+Two things make this a serious ASP rather than a demo:
 
-The A2MCP fit is exact: standardized skill call, no negotiation, price is
-posted, payment settles instantly on X Layer through the OKX Payment SDK. Any
-calling agent — a personal ops agent, a marketing SDR agent, another creator's
-agent — pays per pack. No subscription, no seat license, no login. Just calls.
+1. **The payments are real.** Every verb sits behind an x402 payment wall on
+X Layer. The response is buffered and released only after the OKX Broker
+confirms on-chain settlement — no pay, no data. Failed or empty results
+return an error status and are never billed. We even found and fixed an
+upstream SDK bug where the USDT0 EIP-712 domain name ("USD₮0", not "USDT")
+would have rejected every buyer signature — the fix ships in the repo with a
+regression test, and real on-chain settles prove the full path.
 
-The 10× cost reduction versus freelance short-form editing ($4.50 vs $50-150
-per Reel) is the wedge. The voice DNA is the moat.
+2. **The economics are honest.** ~$1.10 for a finished, published post versus
+$50–150 freelance — a genuine 50–100x cost reduction with instant turnaround.
+The A2MCP fit is exact: standardized skill call, posted price, instant
+settlement, no subscription, no login. Any calling agent — a personal ops
+agent, a marketing agent, another creator's agent — pays per pack.
+
+The 10× cost cut is the wedge. The voice DNA is the moat.
 
 ---
 
 ## FAQ answers
 
 **Q: Is my ASP crypto-related?**
-A: No — it's non-crypto by design (content generation for creators and
-operators). Payment rails are the only crypto element. This makes it eligible
-for the "crypto and non-crypto services welcome" scope.
+A: No — it's a non-crypto service (content generation for creators and
+operators). The payment rail is the only crypto element, which fits the
+"crypto and non-crypto services welcome" scope.
 
 **Q: What does the X participation post include?**
-A: A ≤90s demo video showing a full pipeline call (ingest → mine → pack → ship),
-the ASP marketplace link, GitHub repo link, and `#OKXAI` tag.
+A: A ≤90s demo showing a full paid pipeline call (402 challenge → on-chain
+settle → delivered pack → live post), the marketplace listing link, and #OKXAI.
 
 **Q: Team size?**
 A: Solo builder, reusing production infrastructure from a live agent fleet.
 
 **Q: Deployment status?**
-A: MCP server built. Pending OKX Payment SDK integration + wallet provisioning
-before listing goes live on `okx.ai/agents`.
+A: Live at https://copilot.brunopessoa.com with real on-chain settlement
+verified end-to-end (transactions visible on OKLink / X Layer).

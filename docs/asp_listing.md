@@ -1,55 +1,90 @@
 # OKX.AI ASP Listing — Content Copilot
 
-Metadata to paste into the "Become ASP" form on okx.ai.
+Registration happens through the `onchainos` CLI (`agent pre-check --role asp`
+→ field collection → `validate-listing` → `agent create` → `activate #id`),
+authenticated by the OKX Agentic Wallet. The values below are pre-drafted to
+the CLI's ACTUAL validation rules (verified against okx/onchainos-skills
+`identity-register.md`):
 
-**Agent name:** Content Copilot
+- Agent name: EN 3–25 chars, brand-like, no celebrity/test markers
+- Agent description: one sentence, ≤500 chars
+- Avatar: **image file upload required** (1:1; links rejected) — use
+  `app/static/avatar.png` from this repo (also served at
+  https://copilot.brunopessoa.com/avatar.png for the marketplace icon)
+- Service name: 5–30 chars, descriptive noun phrase, no price in name
+- Service description: **two parts on separate lines** — ① core capability
+  (what + for whom) ② what the caller must provide. Each ≤200 chars, total
+  ≤400. **No GitHub/wallet links, no tech-stack details, no disclaimers.**
+- Type: `A2MCP` (API service) · Fee: plain number string, **USDT**, no symbol
+- Endpoint: public https URL, already deployed (permanent on-chain)
 
-**Tagline:** Podcasts, videos, essays → shipping-ready content packs. Your voice, priced per call.
+---
 
-**Category:** Software Services
+## Step 1 · Identity
 
-**Mode:** Agent-to-MCP (A2MCP)
+**Name:** Content Copilot
 
-**Skills (verbs):**
-- `content_copilot.ingest(source_url, kind?)` — $0.50 USDG
-- `content_copilot.mine_moments(session_id, top_k)` — $1.00 USDG
-- `content_copilot.pack(session_id, moment_id, target, voice_profile?)` — $2.00 USDG
-- `content_copilot.ship(session_id, pack_id, credentials_ref)` — $1.00 USDG
+**Description (≤500):**
+Turns any podcast, video, or article link into ready-to-publish social content
+— ranked shareable moments, then finished posts for X, LinkedIn, Instagram
+Reels, or newsletters, written in the author's own voice and priced per call.
 
-**Full-pipeline cost per Reel:** $4.50 USDG
+**Avatar:** upload `app/static/avatar.png` (1024×1024 PNG).
 
-**Response SLA:** ingest ≤ source-duration × 0.15, everything else ≤ 10s.
+## Step 2 · Services (4 — complete the add-another loop, then Done)
 
-**MCP endpoint:** `https://content-copilot.up.railway.app/mcp` (populated on deploy)
+### Service 1
+- **Name:** Source Transcript Ingestion
+- **Description:**
+  Turns a public podcast, video, or article link into a timestamped transcript
+  session, ready for moment mining and content creation.
+  Provide: 1. source link (podcast, video, or article URL)
+- **Type:** A2MCP
+- **Fee:** `0.1`
+- **Endpoint:** `https://copilot.brunopessoa.com/v1/ingest`
 
-**Public GitHub:** `https://github.com/brunompessoa/content-copilot-asp`
+### Service 2
+- **Name:** Shareable Moment Mining
+- **Description:**
+  Finds and ranks the most shareable 10-40 second moments of an ingested
+  source by novelty, tension, stakes, and quotability, for creators and
+  marketing teams.
+  Provide: 1. session id from ingestion 2. how many moments you want
+- **Type:** A2MCP
+- **Fee:** `0.25`
+- **Endpoint:** `https://copilot.brunopessoa.com/v1/mine`
 
-**Wallet (X Layer):** TBD — provisioned during Bruno-in-the-loop step.
+### Service 3
+- **Name:** Channel Content Pack Writing
+- **Description:**
+  Writes a ready-to-publish post from one mined moment for X, LinkedIn,
+  Instagram Reel, or newsletter, matched to the author's voice and each
+  channel's format rules.
+  Provide: 1. session id 2. moment id 3. target channel 4. voice profile
+- **Type:** A2MCP
+- **Fee:** `0.5`
+- **Endpoint:** `https://copilot.brunopessoa.com/v1/pack`
 
-**Payment SDK integration:** Uses OKX Payment SDK to settle per-call charges on
-X Layer in USDG. Caller identity captured via `_caller_agent` and passed to
-`bill_call()` before every tool execution.
+### Service 4
+- **Name:** Content Pack Publishing
+- **Description:**
+  Publishes a finished content pack to the destination channel and returns
+  the live post link.
+  Provide: 1. session id 2. pack id 3. registered publishing credential name
+- **Type:** A2MCP
+- **Fee:** `0.25`
+- **Endpoint:** `https://copilot.brunopessoa.com/v1/ship`
 
-**Provider profile (30 words):**
-> Solo builder from Warsaw. Runs a 20+-agent production fleet for Cultura
-> Builder (Brazil's biggest AI education community, 8k members) and a
-> personal brand (~4x/day publishing across X, LinkedIn, Instagram,
-> newsletter). This ASP is that content pipeline as a paid skill.
-
-**Support channel:** X @BrunoPessoa22
-
-**Terms:**
-- Caller credentials for `ship` are never persisted — resolved at call time via
-  caller-owned reference and dropped after.
-- Ingest results are cached per source-URL hash (idempotent — repeat calls are
-  free after the first).
-- Refunds: automatic if the tool returns an error status. Otherwise final.
+---
 
 ## Reasons this listing should pass OKX AI internal review
 
-1. **Real utility.** Turns a $50-150 freelance job into a $4.50 API call.
-2. **Non-crypto use case.** Broadens the ASP marketplace beyond DeFi/trade utilities.
-3. **Production pedigree.** Runs behind a real content fleet — not a hackathon toy.
-4. **Clean pay-per-call semantics.** No negotiation, no seat license, no OAuth.
-5. **Portable output.** Downstream ship targets are caller-owned (Typefully,
-   Instagram Graph, LinkedIn, Resend). No lock-in.
+1. **Real utility, non-crypto use case.** Turns a $50–150 freelance job into a
+   ~$1.10 pipeline; broadens the marketplace beyond DeFi utilities.
+2. **The endpoint is LIVE and actually settles.** Full x402 flow proven with
+   real on-chain USDT0 settles on X Layer — not a stub.
+3. **Buyer-protective billing.** Sync settle (no pay, no data) + refuse-to-
+   charge (failed/empty results return non-2xx and are never billed).
+4. **Clean pay-per-call semantics.** No negotiation, no subscription, no OAuth.
+5. **Production pedigree.** Built on a content pipeline pattern running in
+   production for a real 8k-member community's content ops.

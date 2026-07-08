@@ -1,88 +1,117 @@
-# Content Copilot — an OKX.AI ASP
+# Content Copilot — a paid ASP for OKX.AI
 
-Turn any raw source (podcast, YouTube episode, long-form article, tweet-thread) into
-shipping-ready multi-channel content packs in the caller's own voice.
+Turn any raw source (podcast, YouTube episode, long-form article) into
+shipping-ready, channel-native content packs — in the author's own voice —
+priced per call and settled on-chain.
 
 > Submission for the **OKX.AI Genesis Hackathon** — Creative Genius + Social Buzz tracks.
+>
+> **Live gateway:** https://copilot.brunopessoa.com (catalog: [`/catalog`](https://copilot.brunopessoa.com/catalog))
 
 ## Why it exists
 
-Every founder, operator, and creator sits on a pile of raw material — hours of podcast
-audio, half-finished essays, screen recordings, live stream replays. Turning that into
-distributed content (X threads, LinkedIn posts, IG Reel cutdowns, newsletter blurbs) is
-the last-mile bottleneck. Content Copilot is that last mile as a paid agent skill.
+Every founder, operator, and creator sits on a pile of raw material — hours of
+podcast audio, half-finished essays, live stream replays. Turning that into
+distributed content (X threads, LinkedIn posts, IG Reel cutdowns, newsletter
+blurbs) is the last-mile bottleneck. Content Copilot is that last mile as a
+paid agent skill.
 
-Behind the ASP is the pipeline that already runs the Cultura Builder / Bruno Pessoa
-content fleet in production: Whisper transcription, LLM moment-mining tuned on real
-engagement data, voice-DNA rewriting, and per-channel formatting rules (subtitle
-positions, hook shapes, tone banned-word lists) that were learned from thousands of
-rejection notes.
+Behind the ASP is the pipeline pattern that runs the Cultura Builder / Bruno
+Pessoa content fleet in production: caption-first transcription, LLM moment
+mining tuned on real engagement data, voice-DNA rewriting, and per-channel
+formatting rules (subtitle position math, hook shapes, banned-word lists)
+learned from ~1200 real human rejections.
 
-## The four verbs (MCP surface)
+## The payment IS the access
 
-Every ASP call is idempotent and priced separately.
+No accounts, no API keys, no sign-up. Every verb sits behind an
+**x402 payment wall** on OKX X Layer (`eip155:196`):
 
-| Tool | What it does | Price (draft) |
+```
+GET /v1/mine?session_id=…      -> HTTP 402 + PAYMENT-REQUIRED challenge
+   (buyer agent signs an EIP-3009 authorization for USDT0)
+GET /v1/mine + PAYMENT-SIGNATURE -> verb runs
+   -> OKX Broker settles ON-CHAIN
+   -> only then is the result released      (sync settle: no pay, no data)
+```
+
+Two properties we consider non-negotiable on a non-refundable rail:
+
+- **Settle-before-deliver.** The response body is buffered and released only
+  after on-chain settlement confirms (`exact` scheme only — no deferred paths).
+- **Refuse-to-charge.** Any pipeline failure or empty result returns a non-2xx
+  status, which skips settlement entirely. A buyer is never billed for a bad
+  payload. (`X error — not billed` in every error detail.)
+
+This includes a verified fix for an upstream SDK bug: the X Layer USDT0
+contract's EIP-712 domain name is `USD₮0` (U+20AE), not `USDT` — without the
+override in `app/main.py`, **every** buyer signature would be rejected as
+`invalid_signature`.
+
+## The four verbs
+
+| Verb | Price | What it does |
 |---|---|---|
-| `content_copilot.ingest(source_url, kind?)` | Downloads + transcribes (Whisper) + diarizes. Returns `session_id`. | $0.50 |
-| `content_copilot.mine_moments(session_id, top_k=10)` | LLM-ranks 10-40s segments by novelty, tension, stakes, quote-density. Returns ranked moments with confidence + verbatim quote. | $1.00 |
-| `content_copilot.pack(session_id, moment_id, target, voice_profile?)` | Generates a channel-native content pack. Targets: `x` (tweet or thread), `linkedin` (long-form post), `ig_reel` (ffmpeg cut spec + ASS subtitles + hook), `newsletter` (blurb + CTA). | $2.00 |
-| `content_copilot.ship(session_id, pack_id, credentials_ref)` | Publishes via caller-supplied downstream (Typefully, Instagram Graph, LinkedIn, Resend). Returns permalink. | $1.00 |
+| `GET /v1/ingest` | $0.10 | Download + transcribe a source. Caption-first (no compute when subtitles exist), faster-whisper fallback, article extraction. Returns `session_id`. |
+| `GET /v1/mine` | $0.25 | Rank 10–40s segments by novelty, tension, stakes, quote-density, hookability. Returns ranked moments with verbatim quotes + confidence. |
+| `GET /v1/pack` | $0.50 | Generate a channel-native pack from one moment: `x`, `linkedin`, `ig_reel` (ffmpeg cut spec + ASS subtitles), `newsletter`. Voice-profile pinned. |
+| `POST /v1/ship` | $0.25 | Publish a pack via a server-registered downstream credential (Typefully, LinkedIn, Instagram Graph, Resend). Returns permalink. |
 
-Total pipeline cost for one Reel: ~$4.50. Compared to a $50-150 freelance short-form
-edit + $30 caption edit, that's a ~10× cost reduction with instant turnaround.
-
-## Marketplace mode
-
-**A2MCP (Agent-to-MCP)** — pay-per-call, no negotiation, requires OKX Payment SDK.
-Fits standardized skill-call semantics: any calling agent invokes a verb and pays.
-
-## Track fit
-
-- **Creative Genius ($20K)** — the pipeline turns dead-weight source material into
-  shippable creative output. That's the whole track.
-- **Social Buzz ($10K)** — the ASP itself will publish real content demoing itself.
-  Recursive social proof: every demo pack it ships is also its marketing.
-- **Software Utility ($7.5K, secondary)** — clean MCP surface, priced per call.
+Full pipeline: **~$1.10 per finished, published post** — versus $50–150 for a
+freelance short-form edit. Free discovery: [`/catalog`](https://copilot.brunopessoa.com/catalog),
+[`/terms`](https://copilot.brunopessoa.com/terms), `/services.json` (A2MCP manifest).
 
 ## Repo layout
 
 ```
-src/
-  server.py           # MCP server exposing the 4 verbs
-  ingest.py           # Whisper + yt-dlp source download
-  mine.py             # LLM moment scoring
-  pack.py             # Per-channel generation with voice DNA
-  ship.py             # Downstream publisher adapters
-  voice_dna.py        # Bruno-voice + generic voice profile loader
-demo/
-  storyboard.md       # 90s X demo shot list
-  test_call.py        # End-to-end call script for demo
-docs/
-  asp_listing.md      # OKX.AI listing metadata (name, tagline, pricing)
-  google_form.md      # Pre-filled hackquest.io Google Form answers
+app/                  # the PAID surface (FastAPI + x402 payment middleware)
+  main.py             #   verbs, 402 challenges, refuse-to-charge mapping, USD₮0 fix
+  ledger.py           #   settlement ledger: per-nonce idempotency + revenue audit
+  config.py           #   env-driven settings (pricing, network, credentials)
+src/                  # the pipeline engine
+  ingest.py           #   caption-first transcription + article extraction
+  mine.py             #   LLM moment scoring (weighted 5-dimension rubric)
+  pack.py             #   per-channel generation with voice DNA + hard validation
+  ship.py             #   downstream publish adapters
+  llm.py              #   dispatch-first LLM backend abstraction
+  server.py           #   MCP stdio server (unmetered local mode)
+tests/                # 37 tests: pipeline units, 402 challenge shape, ledger
+scripts/
+  live_settle_test.py # real buyer: full paid pipeline with on-chain settles
 ```
 
-## Quick start (local, no OKX SDK yet)
+## Run it locally
 
 ```bash
-pip install -r requirements.txt
-python -m src.server --port 8787
-# In another shell — full pipeline call:
-python demo/test_call.py https://www.youtube.com/watch?v=DX6s6NGgLj2
+python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt
+
+# unmetered local MCP mode (plug into Claude Code / any MCP client)
+.venv/bin/python -m src.server
+
+# paid gateway (needs OKX seller creds — see .env.example)
+.venv/bin/uvicorn app.main:app --port 8788
+
+# tests
+.venv/bin/python -m pytest tests/ -q
 ```
 
-## Deployment target
+## Buy it like an agent would
 
-- **Runtime:** Railway (same infra pattern as fan-token-intel MCP server).
-- **Marketplace listing:** OKX.AI ASP, mode A2MCP.
-- **Payment:** X Layer USDT/USDG per call, settled through OKX Payment SDK.
+```bash
+# funded X Layer wallet JSON: {"private_key": "0x..."}
+BUYER_WALLET_JSON=./buyer.json \
+  .venv/bin/python scripts/live_settle_test.py https://paulgraham.com/greatwork.html
+```
+
+Each step 402-challenges, signs, settles on-chain in USD₮0, and prints the
+delivered payload. Transaction hashes land in the operator ledger
+(`/admin/transactions`) and on [OKLink](https://www.oklink.com/x-layer).
 
 ## Status vs hackathon rules
 
 | Rule | Status |
 |---|---|
-| Build an ASP solving a real-world use case | ✅ shipping pipeline behind it |
-| Pass OKX AI internal review + go live | ⏳ pending wallet + SDK integration |
-| X post with #OKXAI + ≤90s demo | ✅ storyboard drafted in `demo/storyboard.md` |
-| Google Form by 2026-07-17 22:59 UTC | ⏳ answers drafted in `docs/google_form.md` |
+| Build an ASP solving a real use case | ✅ live paid pipeline |
+| Pass OKX AI internal review + go live | ⏳ listing in progress |
+| X post with #OKXAI + ≤90s demo | ⏳ storyboard + live-settle demo ready |
+| Google Form by 2026-07-17 22:59 UTC | ⏳ answers drafted |
