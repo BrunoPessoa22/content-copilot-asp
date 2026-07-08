@@ -36,11 +36,16 @@ async def _via_dispatch(prompt: str, system: str | None, model: str) -> str | No
     secret = os.environ.get("LLM_DISPATCH_SECRET", "")
     if not url or not secret:
         return None
-    payload: dict = {"prompt": prompt, "model": model}
+    # Per-completion ceiling passed to the dispatch server. When the dispatch
+    # URL goes through a fronting proxy with a hard ~100s response limit
+    # (Cloudflare 524), set LLM_DISPATCH_TIMEOUT below that; on a direct
+    # host-local route the default just bounds runaway completions.
+    timeout = int(os.environ.get("LLM_DISPATCH_TIMEOUT", "240"))
+    payload: dict = {"prompt": prompt, "model": model, "timeout": timeout}
     if system:
         payload["system"] = system
     try:
-        async with httpx.AsyncClient(timeout=180.0) as client:
+        async with httpx.AsyncClient(timeout=timeout + 20) as client:
             r = await client.post(
                 f"{url}/complete",
                 json=payload,

@@ -29,10 +29,17 @@ DEFAULT_WEIGHTS = {
     "novelty": 0.28, "tension": 0.22, "stakes": 0.20, "quote": 0.18, "hookability": 0.12,
 }
 
-# Cap how many candidate windows go to the scoring model in one pass. A 3-hour
-# source can produce 400+ windows; scoring them all costs more than the call
-# earns. Windows are sampled evenly across the source when over the cap.
-MAX_WINDOWS = int(os.environ.get("CC_MAX_SCORE_WINDOWS", "120"))
+# Cap how many candidate windows go to the scoring model. A 3-hour source can
+# produce 400+ windows; scoring them all costs more than the call earns.
+# Windows are sampled evenly across the source when over the cap.
+MAX_WINDOWS = int(os.environ.get("CC_MAX_SCORE_WINDOWS", "80"))
+# Windows per scoring call. The LLM backend may sit behind a proxy with a hard
+# ~100s response ceiling (Cloudflare 524): one giant scoring call times out on
+# long sources, so score in small sequential chunks that each finish fast.
+CHUNK_SIZE = int(os.environ.get("CC_SCORE_CHUNK_SIZE", "25"))
+# Scoring doesn't need full window text — a truncated excerpt keeps the prompt
+# small and the per-chunk latency low. Pack still uses the full quote/window.
+SCORE_TEXT_CHARS = 300
 
 SCORING_PROMPT = """You score podcast/interview segments for shareability. Score each dimension 0.0-1.0:
 - novelty: how different from stock advice/platitudes (0=cliche, 1=genuinely new)
@@ -101,14 +108,25 @@ async def run(
         return {"session_id": session_id, "moments": []}
 
     sampled = _sample_evenly(windows, MAX_WINDOWS)
-    batch_prompt = SCORING_PROMPT + "\n\n" + json.dumps(
-        [{"idx": i, "text": w["text"]} for i, w in sampled], ensure_ascii=False
-    )
-    text = await llm.complete(batch_prompt, tier="fast")
-    try:
-        scores = llm.extract_json(text, "[", "]")
-    except (ValueError, json.JSONDecodeError) as exc:
-        raise MineError(f"scoring pass returned unparseable output: {exc}")
+    scores: list = []
+    parse_failures = 0
+    for chunk_start in range(0, len(sampled), CHUNK_SIZE):
+        chunk = sampled[chunk_start : chunk_start + CHUNK_SIZE]
+        batch_prompt = SCORING_PROMPT + "\n\n" + json.dumps(
+            [{"idx": i, "text": w["text"][:SCORE_TEXT_CHARS]} for i, w in chunk],
+            ensure_ascii=False,
+        )
+        text = await llm.complete(batch_prompt, tier="fast")
+        try:
+            scores.extend(llm.extract_json(text, "[", "]"))
+        except (ValueError, json.JSONDecodeError) as exc:
+            parse_failures += 1
+            logger.warning("score_chunk_unparseable start=%d err=%s", chunk_start, exc)
+    if not scores:
+        raise MineError(
+            "scoring pass returned unparseable output"
+            if parse_failures else "scoring pass returned no scores"
+        )
 
     valid_idx = {i for i, _ in sampled}
     ranked: list[dict[str, Any]] = []
