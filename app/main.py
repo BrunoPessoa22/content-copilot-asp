@@ -12,10 +12,12 @@ status, which skips settlement — the buyer is never billed for a bad payload.
 Run:  uvicorn app.main:app --host 0.0.0.0 --port $PORT
 """
 
+import asyncio
 import inspect
 import json
 import logging
 import os
+import re
 import secrets
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -77,10 +79,16 @@ _AVATAR_PATH = os.path.join(os.path.dirname(__file__), "static", "avatar.png")
 _PIPELINE_ERRORS = (ingest.IngestError, mine.MineError, pack.PackError, ship.ShipError)
 
 
+# Every verb accepts GET (query params) AND POST (JSON body) — the OKX platform
+# validator and its buyer agents call registered A2MCP endpoints with POST, so a
+# GET-only route would answer their probe with a bare 405 instead of the 402
+# challenge and fail x402 standard validation.
+VERB_METHODS = ("GET", "POST")
+
+
 @dataclass(frozen=True)
 class Verb:
     slug: str
-    method: str          # GET | POST
     price: str           # display price, e.g. "$0.10"
     timeout: int         # payment window advertised in the 402 challenge
     description: str
@@ -90,23 +98,23 @@ VERBS: dict[str, Verb] = {
     v.slug: v
     for v in (
         Verb(
-            "ingest", "GET", settings.price_ingest, settings.ingest_timeout_seconds,
+            "ingest", settings.price_ingest, settings.ingest_timeout_seconds,
             "Download + transcribe a source (YouTube, podcast, MP3/MP4 URL, article). "
             "Params: source_url (required), kind. Returns session_id.",
         ),
         Verb(
-            "mine", "GET", settings.price_mine, settings.max_timeout_seconds,
+            "mine", settings.price_mine, settings.max_timeout_seconds,
             "Rank 10-40s segments of an ingested source by novelty/tension/stakes/"
             "quote-density. Params: session_id (required), top_k. Returns ranked moments.",
         ),
         Verb(
-            "pack", "GET", settings.price_pack, settings.max_timeout_seconds,
+            "pack", settings.price_pack, settings.max_timeout_seconds,
             "Generate a channel-native content pack from one mined moment. Params: "
             "session_id, moment_id, target (x|linkedin|ig_reel|newsletter), voice_profile.",
         ),
         Verb(
-            "ship", "POST", settings.price_ship, settings.max_timeout_seconds,
-            "Publish a pack via a server-registered downstream credential. JSON body: "
+            "ship", settings.price_ship, settings.max_timeout_seconds,
+            "Publish a pack via a server-registered downstream credential. Params: "
             "session_id, pack_id, credentials_ref. Returns provider id + permalink.",
         ),
     )
@@ -191,6 +199,47 @@ async def _on_settle_failure(ctx) -> None:
 
 # --- paid handlers ----------------------------------------------------------------
 
+async def _request_params(request: Request) -> dict[str, Any]:
+    """Caller params: query string merged with an optional JSON-object body
+    (body wins). Callers are LLM agents that may GET with query params or POST
+    a JSON body — both must work on every verb."""
+    params: dict[str, Any] = dict(request.query_params)
+    body = await request.body()
+    if body and body.strip():
+        try:
+            parsed = json.loads(body)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            raise HTTPException(status_code=422, detail="request body must be valid JSON")
+        if isinstance(parsed, dict):
+            params.update(parsed)
+        else:
+            raise HTTPException(status_code=422, detail="JSON body must be an object")
+    return params
+
+
+def _pick(params: dict[str, Any], *names: str) -> Optional[str]:
+    """First non-empty value under any accepted alias, as a string."""
+    for name in names:
+        val = params.get(name)
+        if val is not None and str(val).strip():
+            return str(val).strip()
+    return None
+
+
+_URL_RE = re.compile(r"https?://[^\s\"'<>]+")
+
+
+def _sniff_url(params: dict[str, Any]) -> Optional[str]:
+    """Fallback for ingest: agent callers don't always guess the param name
+    right — if exactly one http(s) URL appears anywhere in the params, use it."""
+    urls: list[str] = []
+    for val in params.values():
+        if isinstance(val, str):
+            urls.extend(_URL_RE.findall(val))
+    unique = list(dict.fromkeys(urls))
+    return unique[0] if len(unique) == 1 else None
+
+
 def _payment_info(request: Request) -> tuple[Optional[str], Optional[str], Optional[str]]:
     """Extract (nonce, payer, amount) from the verified payment on request.state."""
     pp = getattr(request.state, "payment_payload", None)
@@ -224,9 +273,20 @@ async def _run_paid(
 
     delivered = False
     try:
-        result = await work()
+        # Hard response deadline: the caller is an agent task with its own
+        # timeout — a hung pipeline must become a fast, unbilled error, never
+        # silence (non-2xx skips settlement).
+        result = await asyncio.wait_for(work(), timeout=settings.work_deadline_seconds)
         delivered = True
         return JSONResponse(result)
+    except asyncio.TimeoutError:
+        logger.error("work_deadline_exceeded slug=%s deadline=%ss", slug, settings.work_deadline_seconds)
+        await alerts.alert("work_deadline_exceeded", slug=slug)
+        raise HTTPException(
+            status_code=504,
+            detail=f"processing exceeded {settings.work_deadline_seconds}s — not billed; "
+                   "try a shorter source or retry later",
+        )
     except LlmUnavailable as exc:
         logger.error("llm_unavailable slug=%s: %s", slug, exc)
         await alerts.alert("llm_unavailable", slug=slug)
@@ -244,10 +304,15 @@ async def _run_paid(
 
 
 async def _handle_ingest(request: Request) -> JSONResponse:
-    source_url = request.query_params.get("source_url")
+    p = await _request_params(request)
+    source_url = _pick(p, "source_url", "url", "source", "link") or _sniff_url(p)
     if not source_url:
-        raise HTTPException(status_code=422, detail="source_url query param is required")
-    kind = request.query_params.get("kind", "auto")
+        raise HTTPException(
+            status_code=422,
+            detail="source_url is required (query param or JSON body): "
+                   "the public URL of the podcast, video, or article to ingest",
+        )
+    kind = _pick(p, "kind", "type") or "auto"
 
     async def work() -> dict[str, Any]:
         return await ingest.run(source_url, kind)
@@ -256,11 +321,16 @@ async def _handle_ingest(request: Request) -> JSONResponse:
 
 
 async def _handle_mine(request: Request) -> JSONResponse:
-    session_id = request.query_params.get("session_id")
+    p = await _request_params(request)
+    session_id = _pick(p, "session_id", "sessionId", "session")
     if not session_id:
-        raise HTTPException(status_code=422, detail="session_id query param is required")
+        raise HTTPException(
+            status_code=422,
+            detail="session_id is required (query param or JSON body): "
+                   "the id returned by the ingest service",
+        )
     try:
-        top_k = int(request.query_params.get("top_k", "10"))
+        top_k = int(_pick(p, "top_k", "topK", "count") or "10")
     except ValueError:
         raise HTTPException(status_code=422, detail="top_k must be an integer")
 
@@ -275,29 +345,41 @@ async def _handle_mine(request: Request) -> JSONResponse:
 
 
 async def _handle_pack(request: Request) -> JSONResponse:
-    q = request.query_params
-    missing = [p for p in ("session_id", "moment_id", "target") if not q.get(p)]
+    p = await _request_params(request)
+    session_id = _pick(p, "session_id", "sessionId", "session")
+    moment_id = _pick(p, "moment_id", "momentId", "moment")
+    target = _pick(p, "target", "channel", "platform")
+    missing = [n for n, v in (("session_id", session_id), ("moment_id", moment_id),
+                              ("target", target)) if not v]
     if missing:
-        raise HTTPException(status_code=422, detail=f"missing query params: {missing}")
-    voice = load_voice_profile(q.get("voice_profile", "generic-founder"))
+        raise HTTPException(
+            status_code=422,
+            detail=f"missing params (query or JSON body): {missing}; "
+                   "target is one of x|linkedin|ig_reel|newsletter",
+        )
+    voice = load_voice_profile(_pick(p, "voice_profile", "voiceProfile", "voice") or "generic-founder")
 
     async def work() -> dict[str, Any]:
-        return await pack.run(q["session_id"], q["moment_id"], q["target"], voice)
+        return await pack.run(session_id, moment_id, target, voice)
 
     return await _run_paid("pack", request, work)
 
 
 async def _handle_ship(request: Request) -> JSONResponse:
-    try:
-        body = json.loads(await request.body())
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        raise HTTPException(status_code=422, detail="ship expects a JSON body")
-    missing = [p for p in ("session_id", "pack_id", "credentials_ref") if not body.get(p)]
+    p = await _request_params(request)
+    session_id = _pick(p, "session_id", "sessionId", "session")
+    pack_id = _pick(p, "pack_id", "packId", "pack")
+    credentials_ref = _pick(p, "credentials_ref", "credentialsRef", "credential", "credentials")
+    missing = [n for n, v in (("session_id", session_id), ("pack_id", pack_id),
+                              ("credentials_ref", credentials_ref)) if not v]
     if missing:
-        raise HTTPException(status_code=422, detail=f"missing body fields: {missing}")
+        raise HTTPException(
+            status_code=422,
+            detail=f"missing params (query or JSON body): {missing}",
+        )
 
     async def work() -> dict[str, Any]:
-        return await ship.run(body["session_id"], body["pack_id"], body["credentials_ref"])
+        return await ship.run(session_id, pack_id, credentials_ref)
 
     return await _run_paid("ship", request, work)
 
@@ -354,6 +436,7 @@ def a2mcp_services() -> list[dict]:
             "name": f"Content Copilot: {slug}",
             "endpoint": f"{base}{_public_path(slug)}",
             "service_type": "A2MCP",
+            "methods": list(VERB_METHODS),
             "price": f"{_price_amount(v.price)} {PRICE_TOKEN}",
             "description": v.description,
         }
@@ -394,15 +477,20 @@ def create_app() -> FastAPI:
 
     routes: dict[str, RouteConfig] = {}
     for slug, verb in VERBS.items():
-        routes[f"{verb.method} {_public_path(slug)}"] = RouteConfig(
+        cfg = RouteConfig(
             accepts=_accepts(verb),
             description=f"Content Copilot: {verb.description}",
             mime_type="application/json",
         )
+        # Paywall EVERY method that can reach the handler. Starlette auto-adds
+        # HEAD to GET routes, so a missing "HEAD ..." key would let an unpaid
+        # HEAD run the full pipeline with the body stripped.
+        for method in (*VERB_METHODS, "HEAD"):
+            routes[f"{method} {_public_path(slug)}"] = cfg
         app.add_api_route(
             _public_path(slug),
             _HANDLERS[slug],
-            methods=[verb.method],
+            methods=list(VERB_METHODS),
             name=f"verb_{slug}",
             summary=verb.description,
         )
@@ -439,13 +527,14 @@ def create_app() -> FastAPI:
                        "ingest -> mine -> pack -> ship. The x402 payment (USDT0 on OKX "
                        "X Layer) IS the access — no account or API key needed.",
             "network": settings.network,
-            "how_it_works": "call /v1/<verb> -> HTTP 402 -> sign an x402 payment -> "
-                            "the verb runs; the result is released after on-chain settlement.",
+            "how_it_works": "call /v1/<verb> (GET query params or POST JSON body) -> "
+                            "HTTP 402 -> sign an x402 payment -> the verb runs; the "
+                            "result is released after on-chain settlement.",
             "endpoints": {
                 "catalog": "/catalog (free: verbs + prices)",
                 "terms": "/terms (free)",
                 "health": "/health",
-                "verbs": "/v1/{ingest|mine|pack|ship} (paid)",
+                "verbs": "/v1/{ingest|mine|pack|ship} (paid; GET or POST)",
             },
         }
 
@@ -507,10 +596,11 @@ def create_app() -> FastAPI:
             "verbs": [
                 {
                     "verb": slug,
-                    "method": v.method,
+                    "methods": list(VERB_METHODS),
                     "path": _public_path(slug),
                     "price": v.price,
                     "description": v.description,
+                    "params_via": "query string (GET) or JSON body (POST)",
                 }
                 for slug, v in VERBS.items()
             ],

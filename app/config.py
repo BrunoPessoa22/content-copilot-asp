@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     max_timeout_seconds: int = 300       # payment deadline advertised in the 402 challenge
     ingest_timeout_seconds: int = 900    # ingest can download+transcribe; needs a longer window
     facilitator_timeout_seconds: float = 10.0
+    # Hard per-call processing deadline: OKX platform tasks time out waiting on
+    # slow agents — past this, return a fast unbilled 504 instead of hanging.
+    work_deadline_seconds: int = 210
 
     # --- Pricing (USD; settled as USDT0 atomic units on X Layer) --------------
     # Hackathon-intro pricing: low enough that any agent can afford a full

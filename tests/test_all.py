@@ -364,6 +364,38 @@ def test_unpaid_ship_post_402(client):
     assert r.status_code == 402
 
 
+_ALL_VERB_PATHS = ["/v1/ingest", "/v1/mine", "/v1/pack", "/v1/ship"]
+
+
+@pytest.mark.parametrize("path", _ALL_VERB_PATHS)
+def test_unpaid_post_402_with_challenge(client, path):
+    # OKX's platform validator probes registered endpoints with POST (their
+    # self-check is `curl -i -X POST`); a bare 405 here fails x402 validation.
+    for kwargs in ({}, {"json": {"anything": "goes"}}):
+        r = client.post(path, **kwargs)
+        assert r.status_code == 402, f"POST {path} {kwargs} -> {r.status_code}"
+        challenge = _decode_challenge(r)
+        opt = challenge["accepts"][0]
+        assert opt["scheme"] == "exact"
+        assert opt["network"] == "eip155:196"
+
+
+@pytest.mark.parametrize("path", _ALL_VERB_PATHS)
+def test_unpaid_get_402_every_verb(client, path):
+    r = client.get(path)
+    assert r.status_code == 402, f"GET {path} -> {r.status_code}"
+    assert _decode_challenge(r)["accepts"]
+
+
+@pytest.mark.parametrize("path", _ALL_VERB_PATHS)
+def test_unpaid_head_402_every_verb(client, path):
+    # Starlette auto-adds HEAD to GET routes: without a HEAD paywall key an
+    # unpaid HEAD would run the full pipeline with the body stripped.
+    r = client.head(path)
+    assert r.status_code == 402, f"HEAD {path} -> {r.status_code}"
+    assert r.headers.get("payment-required") or r.headers.get("PAYMENT-REQUIRED")
+
+
 def test_docs_disabled(client):
     assert client.get("/docs").status_code in (402, 404)
     assert client.get("/openapi.json").status_code in (402, 404)
@@ -386,11 +418,11 @@ def test_admin_transactions_shape(client):
 # --------------------------------------------------------------------------- #
 # refuse-to-charge mapping (handler level, no payment needed)                  #
 # --------------------------------------------------------------------------- #
-def _fake_request(query: str = "", body: bytes = b"") -> "object":
+def _fake_request(query: str = "", body: bytes = b"", method: str = "GET") -> "object":
     from starlette.requests import Request
 
     scope = {
-        "type": "http", "method": "GET", "path": "/v1/x", "query_string": query.encode(),
+        "type": "http", "method": method, "path": "/v1/x", "query_string": query.encode(),
         "headers": [], "client": ("127.0.0.1", 1234), "app": None, "state": {},
     }
 
@@ -444,6 +476,64 @@ async def test_missing_params_map_to_422(client):
     with pytest.raises(HTTPException) as exc:
         await m._handle_ingest(_fake_request(""))
     assert exc.value.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_post_body_params_reach_handler(client, monkeypatch):
+    import app.main as m
+
+    seen = {}
+
+    async def fake_mine_run(session_id, top_k):
+        seen["session_id"], seen["top_k"] = session_id, top_k
+        return {"session_id": session_id, "moments": [{"moment_id": "m1"}]}
+
+    monkeypatch.setattr(m.mine, "run", fake_mine_run)
+    req = _fake_request(body=json.dumps({"session_id": "cc_body", "top_k": 3}).encode(),
+                        method="POST")
+    resp = await m._handle_mine(req)
+    assert resp.status_code == 200
+    assert seen == {"session_id": "cc_body", "top_k": 3}
+
+
+@pytest.mark.anyio
+async def test_ingest_accepts_alias_and_sniffed_url(client, monkeypatch):
+    import app.main as m
+
+    calls = []
+
+    async def fake_ingest_run(source_url, kind):
+        calls.append(source_url)
+        return {"session_id": "cc_ok"}
+
+    monkeypatch.setattr(m.ingest, "run", fake_ingest_run)
+    # alias key
+    await m._handle_ingest(_fake_request(
+        body=json.dumps({"url": "https://example.com/a.mp3"}).encode(), method="POST"))
+    # unknown key, URL sniffed from the value
+    await m._handle_ingest(_fake_request(
+        body=json.dumps({"the_podcast": "https://example.com/b.mp3"}).encode(), method="POST"))
+    assert calls == ["https://example.com/a.mp3", "https://example.com/b.mp3"]
+
+
+@pytest.mark.anyio
+async def test_work_deadline_maps_to_504(client, monkeypatch):
+    import asyncio as aio
+
+    from fastapi import HTTPException
+
+    import app.main as m
+
+    async def slow_mine_run(session_id, top_k):
+        await aio.sleep(5)
+        return {"moments": [{"moment_id": "m1"}]}
+
+    monkeypatch.setattr(m.mine, "run", slow_mine_run)
+    monkeypatch.setattr(m.settings, "work_deadline_seconds", 0.2)
+    with pytest.raises(HTTPException) as exc:
+        await m._handle_mine(_fake_request("session_id=cc_slow"))
+    assert exc.value.status_code == 504
+    assert "not billed" in exc.value.detail
 
 
 # --------------------------------------------------------------------------- #
